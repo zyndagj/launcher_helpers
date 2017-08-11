@@ -1,0 +1,19 @@
+#!/bin/bash
+
+case "$TACC_SYSTEM" in
+	stampede)
+		NCORES=16
+		;;
+	stampede2)
+		NCORES=68
+		;;
+	ls5)
+		NCORES=24
+		;;
+	*)
+		echo "$TACC_SYSTEM is unhandled"
+		exit 1
+		;;
+esac
+
+echo $NCORES

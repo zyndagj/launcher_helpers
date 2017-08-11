@@ -1,0 +1,100 @@
+#!/bin/bash
+
+helpMessage () {
+	printf "align_dna: A script for calling bwa and generating simple stats\n"
+	printf "\nusage: align_dna -reg REGEX -R FASTA\n\n"
+	printf "%10s %6s  Single fastq or R1 from a paired run.\n" "-reg" "FASTQ"
+	printf "%10s %6s  Reference.\n" "-R|--ref" "FASTA"
+	exit
+}
+
+	
+NCORES=$(get_cores || exit 1)
+
+while [[ $# > 1 ]]
+do
+	key="$1"
+	shift
+	case $key in
+		-reg)
+			reg="$1"
+			shift
+			;;
+		-R|--ref)
+			ref="$1"
+			if [[ ! -f $ref ]]
+			then
+				echo $ref "reference doesn't exist."
+				exit 1
+			fi
+			shift
+			;;
+		*)
+			printf "Got bad argument: %s\n" $key
+			helpMessage
+			;;
+	esac
+done
+if [ -z $reg ] || [ -z $ref ]
+then
+	helpMessage
+fi
+
+# Check input before submission
+pre=`for f in *${reg}; do echo ${f%%$reg};done | sort -u`
+echo "Files found for analysis:"
+for p in $pre; do printf " - %s\n" $p; for f in $p$reg; do printf "   + $f\n" $f; done; done
+read -r -p "Continue? [Y/n] " response
+if [[ ! $response =~ ^([Yy]es|[Yy])$ ]]; then
+	exit
+fi
+
+# Make bwaList file
+if [[ -f bwaList ]]; then rm bwaList; fi
+for name in $pre
+do
+	bwaCmd="bwa mem -t $NCORES -M $ref "
+	toBam="samtools view -uS - 2>> ${name}.log | samtools sort -m 200M -@ $NCORES -O bam -o ${name}.bam -T ${name}_tmp 2>> $name.log"
+	onlyUniq="samtools view -bF 0x104 -@ $((NCORES/4)) $name.bam > ${name}_uniq.bam 2>> $name.log"
+	bams="$name.bam ${name}_uniq.bam"
+	inputs=($name$reg)
+	pPaired=""
+	if [[ 2 -eq ${#inputs[@]} ]];
+	then
+		opp=${name}_uniq_ppaired
+		pPaired="&& samtools view -bf 0x2 -@ $((NCORES/4)) ${name}_uniq.bam > ${opp}.bam 2>> $name.log"
+		rmDup="samtools rmdup ${opp}.bam ${opp}_rmdup.bam"
+		bams+=" ${name}_uniq_ppaired.bam ${opp}_rmdup.bam"
+	else
+		ou=${name}_uniq
+		rmDup="samtools rmdup -s ${ou}.bam ${ou}_rmdup.bam"
+		bams+=" ${ou}_rmdup.bam"
+	fi
+	flagCMD=""
+	for bam in $bams
+	do
+		flagCMD+=" && samtools flagstat $bam >> ${bam/bam/flagstat}"
+	done
+	echo $bwaCmd $name$reg "|" $toBam "&&" $onlyUniq $pPaired $rmDup $flagCMD >> bwaList
+	bwaVersion=`bwa 2>&1 | grep "Version"`
+	samtoolsVersion=`samtools 2>&1 | grep "Version"`
+	if [[ -f $name.log ]]; then rm $name.log; fi
+	echo "BWA $bwaVersion" >> $name.log
+	printf "BWA align reads on $NCORES and mark splits as secondary\n\t$bwaCmd" >> $name.log
+	echo $name$reg >> $name.log
+	echo "Samtools $samtoolsVersion" >> $name.log
+	printf "Samtools convert bwa sam to bam\n\t$toBam\n" >> $name.log
+	printf "Samtools extract unique alignments\n\t$onlyUniq\n" >> $name.log
+	[ -n pPaired ] && printf "Samtools extract unique alignments\n\t$pPaired\n" >> $name.log
+	printf "Samtools remove duplicates\n\t${rmDup}\n" >> $name.log
+done
+
+# Calc number of nodes necessary and submit
+preA=($pre)
+nSamples=${#preA[@]}
+#AFF=$(( $nSamples * $NCORES ))
+read -r -p "Submit to SLURM? [Y/n] " response
+if [[ ! $response =~ ^([Yy]es|[Yy])$ ]]; then
+	exit
+fi
+sbatch -N $((nSamples/3)) -n $((nSamples/3)) $TACC_HELPER_DIR/jobScripts/runBWA.sh

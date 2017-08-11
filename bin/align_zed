@@ -1,0 +1,87 @@
+#!/bin/bash
+
+helpMessage () {
+	printf "align_dna: A script for calling bwa and generating simple stats\n"
+	printf "\nusage: align_dna -reg REGEX -R FASTA\n\n"
+	printf "%10s %6s  Single fastq or R1 from a paired run. '*' will be prepended.\n" "-reg" "FASTQ"
+	printf "%10s %6s  Reference.\n" "-R|--ref" "FASTA"
+	exit
+}
+
+NCORES=`getconf _NPROCESSORS_ONLN`
+
+while [[ $# > 1 ]]
+do
+	key="$1"
+	shift
+	case $key in
+		-reg)
+			reg="$1"
+			shift
+			;;
+		-R|--ref)
+			ref="$1"
+			if [[ ! -f $ref ]]
+			then
+				echo $ref "reference doesn't exist."
+				exit 1
+			fi
+			shift
+			;;
+		*)
+			printf "Got bad argument: %s\n" $key
+			helpMessage
+			;;
+	esac
+done
+if [ -z $reg ] || [ -z $ref ]
+then
+	helpMessage
+fi
+
+# Check chloroplast
+# Create fai if it doesn't exist
+if [[ ! -f ${ref}.fai ]]
+then
+	echo "Creating ${ref}.fai"
+	ml samtools
+	samtools faidx ${ref}
+fi
+echo "Which chromosome should be used for chloroplast?"
+cut -f 1 ${ref}.fai
+read -rp "Choice (empty for none): " choice
+
+# Check input before submission
+pre=`for f in *${reg}; do echo ${f%%$reg};done | sort -u`
+echo "Files found for analysis:"
+for p in $pre; do printf " - %s\n" $p; for f in $p$reg; do printf "   + $f\n" $f; done; done
+read -r -p "Continue? [Y/n] " response
+if [[ ! $response =~ ^([Yy]es|[Yy])$ ]]; then
+	exit
+fi
+
+# Make bwaList file
+if [[ -f zedList ]]; then rm zedList; fi
+for name in $pre
+do
+	zedCmd="zed-align.py -U -R $ref -O $name -N $name"
+	[ -z $choice ] || zedCmd+=" -C $choice"
+	inputs=($name$reg)
+	if [[ 2 -eq ${#inputs[@]} ]];
+	then
+		zedCmd+=" -r1 ${inputs[0]} -r2 ${inputs[1]}"
+	else
+		zedCmd+=" -r1 ${inputs[0]}"
+	fi
+	echo $zedCmd
+done | tee zedList
+
+# Calc number of nodes necessary and submit
+preA=($pre)
+nSamples=${#preA[@]}
+#AFF=$(( $nSamples * $NCORES ))
+read -r -p "Submit to SLURM? [Y/n] " response
+if [[ ! $response =~ ^([Yy]es|[Yy])$ ]]; then
+	exit
+fi
+sbatch -N $nSamples -n $nSamples $HOME/.local/bin/jobScripts/runZED.sh

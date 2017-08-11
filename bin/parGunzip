@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sbatch --export=files="`echo $@`" $HOME/.local/bin/jobScripts/gunzipJob.sh
