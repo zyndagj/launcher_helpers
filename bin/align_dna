@@ -63,11 +63,11 @@ do
 	then
 		opp=${name}_uniq_ppaired
 		pPaired="&& samtools view -bf 0x2 -@ $((NCORES/4)) ${name}_uniq.bam > ${opp}.bam 2>> $name.log"
-		rmDup="samtools rmdup ${opp}.bam ${opp}_rmdup.bam"
+		rmDup="&& samtools index ${opp}.bam && samtools rmdup ${opp}.bam ${opp}_rmdup.bam"
 		bams+=" ${name}_uniq_ppaired.bam ${opp}_rmdup.bam"
 	else
 		ou=${name}_uniq
-		rmDup="samtools rmdup -s ${ou}.bam ${ou}_rmdup.bam"
+		rmDup="&& samtools index ${out}.bam && samtools rmdup -s ${ou}.bam ${ou}_rmdup.bam"
 		bams+=" ${ou}_rmdup.bam"
 	fi
 	flagCMD=""
